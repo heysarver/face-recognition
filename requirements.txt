@@ -1,0 +1,5 @@
+glob2
+torch>=1.7.1
+facenet-pytorch
+Pillow
+torchvision
