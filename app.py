@@ -5,7 +5,7 @@ from facenet_pytorch import MTCNN, InceptionResnetV1
 import torch
 from PIL import Image
 import os
-from torchvision import datasets
+from torchvision import datasets, transforms
 from torch.utils.data import DataLoader, Dataset
 from torchvision import transforms
 from torchvision.io import read_image
@@ -14,15 +14,15 @@ from torchvision.transforms import ToTensor
 
 class CustomImageDataset(Dataset):
     def __init__(self, img_dirs, transform=None):
-        # img_dirs is a dict with keys 'person' and 'not_person' pointing to their respective image folders
         self.img_labels = []
         self.img_names = []
-        for label, img_dir in enumerate(['person', 'not_person']):
-            dir_path = img_dirs[img_dir]
+        for label, dir_path in img_dirs.items():  # Correct iteration over items
             for img_name in os.listdir(dir_path):
                 if img_name.endswith('.jpg'):
                     self.img_names.append(os.path.join(dir_path, img_name))
-                    self.img_labels.append(label)
+                    # Convert label 'person'/'not_person' to a numerical label if needed
+                    numeric_label = 0 if label == 'person' else 1
+                    self.img_labels.append(numeric_label)
         self.transform = transform
 
     def __len__(self):
@@ -30,10 +30,7 @@ class CustomImageDataset(Dataset):
 
     def __getitem__(self, idx):
         img_path = self.img_names[idx]
-        image = read_image(img_path)
-        image = convert_image_dtype(image, dtype=torch.float32)
-        if image.shape[0] == 1:
-            image = image.repeat(3, 1, 1)
+        image = Image.open(img_path).convert('RGB')
         if self.transform:
             image = self.transform(image)
         label = self.img_labels[idx]
@@ -42,6 +39,10 @@ class CustomImageDataset(Dataset):
 def preprocess_data(training_images_folder):
     dataset = CustomImageDataset(training_images_folder, transform=transforms.Compose([
         transforms.Resize((160, 160)),
+        transforms.ToTensor(),  # Convert the image to a tensor.
+        # Normalize the image. The mean and std have to be sequences (e.g., tuples), with one value for each channel.
+        # These values (mean: 0.5, std: 0.5) are placeholders. Use appropriate values for your dataset.
+        transforms.Normalize(mean=(0.5, 0.5, 0.5), std=(0.5, 0.5, 0.5)),
     ]))
     print(f"Length of dataset: {len(dataset)}")
     dataloader = DataLoader(dataset, batch_size=len(dataset)//2, shuffle=True)
@@ -66,31 +67,26 @@ def train_model(dataloader, device):
         print(f'Epoch {epoch + 1}, Loss: {running_loss / len(dataloader)}')
     return model
 
+# Adjustments are primarily in the detect_faces function
 def detect_faces(model, device, test_images, test_images_paths):
     model.eval()  # set the model to evaluation mode
     mtcnn = MTCNN(keep_all=True, device=device)
     embeddings = []
     for idx, test_image in enumerate(test_images):
         try:
-            print(f"Processing image: {test_images_paths[idx]}")  # Log the image being processed
+            print(f"Processing image: {test_images_paths[idx]}")
             test_image_cropped = mtcnn(test_image)
-            print(f"Output from MTCNN for {test_images_paths[idx]}: {test_image_cropped}")  # Log MTCNN output
-
-            if test_image_cropped is not None:
+            # Check if any faces were detected
+            if test_image_cropped is not None and len(test_image_cropped) > 0:
+                # Stack faces if more than one is detected
                 if isinstance(test_image_cropped, list):
-                    if len(test_image_cropped) > 0:
-                        test_image_cropped = torch.stack(test_image_cropped).to(device)
-                        print(f"Faces detected and stacked for {test_images_paths[idx]}")
-                    else:
-                        print(f"No faces detected in {test_images_paths[idx]} after MTCNN processing.")
-                        embeddings.append(None)
-                        continue
+                    test_image_cropped = torch.stack(test_image_cropped).to(device)
                 else:
+                    # Ensure single face tensors are correctly shaped
                     test_image_cropped = test_image_cropped.unsqueeze(0).to(device)
-                    print(f"Single face detected and processed for {test_images_paths[idx]}")
-                
                 embedding = model(test_image_cropped)
                 embeddings.append(embedding)
+                print(f"Faces detected and processed for {test_images_paths[idx]}")
             else:
                 print(f"No faces detected in {test_images_paths[idx]} by MTCNN.")
                 embeddings.append(None)
@@ -102,15 +98,16 @@ def detect_faces(model, device, test_images, test_images_paths):
 
 def load_test_images(test_images_folder):
     test_images_paths = glob.glob(os.path.join(test_images_folder, '*.jpg'))
-    to_tensor = ToTensor()
-    test_images = [to_tensor(Image.open(image_path)) for image_path in test_images_paths]
+    test_images = [Image.open(image_path) for image_path in test_images_paths]
     return test_images, test_images_paths
 
 # Update the main function to pass test_images_paths to detect_faces
 def main(training_images_folder, test_images_folder):
     device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
-    training_images_folder = {'person': os.path.join(training_images_folder, 'person'), 
-                              'not_person': os.path.join(training_images_folder, 'not_person')}
+    training_images_folder = {
+        'person': os.path.join(training_images_folder, 'person'),
+        'not_person': os.path.join(training_images_folder, 'not_person')
+    }
     dataloader = preprocess_data(training_images_folder)
     model = train_model(dataloader, device)
     test_images, test_images_paths = load_test_images(test_images_folder)
@@ -121,6 +118,7 @@ def main(training_images_folder, test_images_folder):
         else:
             print(f"No face detected in {path}.")
 
+# The main function remains largely unchanged
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument("--training_images_folder", type=str, default="training_images", help="Folder containing images of the face to train on.")
