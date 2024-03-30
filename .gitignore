@@ -165,3 +165,5 @@ test_images/**/*.jpg
 test_images/**/*.png
 training_images/**/*.jpg
 training_images/**/*.png
+*.gif
+*.tar.gz
