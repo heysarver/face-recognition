@@ -5,7 +5,7 @@ from torch.utils.data import DataLoader
 from torchvision import transforms
 from torchvision.transforms import ToTensor
 import argparse
-from facenet_pytorch import MTCNN, InceptionResnetV1
+from facenet_pytorch import MTCNN
 from PIL import Image
 import os
 from torchvision.transforms import RandomHorizontalFlip, RandomRotation, Resize, Normalize
