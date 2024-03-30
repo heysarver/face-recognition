@@ -20,9 +20,14 @@ class CustomImageDataset(Dataset):
         for label, dir_path in img_dirs.items():
             for img_name in os.listdir(dir_path):
                 if img_name.lower().endswith(('.jpg', '.png')):
-                    self.img_names.append(os.path.join(dir_path, img_name))
-                    numeric_label = 0 if label == 'person' else 1
-                    self.img_labels.append(numeric_label)
+                    img_path = os.path.join(dir_path, img_name)
+                    try:
+                        Image.open(img_path).convert('RGB')  # Try to open the image
+                        self.img_names.append(img_path)
+                        numeric_label = 0 if label == 'person' else 1
+                        self.img_labels.append(numeric_label)
+                    except IOError:
+                        print(f"Warning: Could not open image file {img_path}. Skipping.")
         self.transform = transform
 
     def __len__(self):
@@ -71,7 +76,8 @@ def train_model(dataloader, device):
     model.train()
     optimizer = torch.optim.Adam(model.parameters(), lr=0.001)  # Train all parameters
     criterion = torch.nn.CrossEntropyLoss()
-    for epoch in range(50):
+    epoch = 0
+    while True:
         running_loss = 0.0
         for i, data in enumerate(dataloader, 0):
             inputs, labels = data[0].to(device), data[1].to(device)
@@ -82,12 +88,21 @@ def train_model(dataloader, device):
             optimizer.step()
             running_loss += loss.item()
         print(f"Epoch {epoch+1}, Loss: {running_loss}")
+        epoch += 1
+        if running_loss < 0.22 and epoch >= 10:
+            break
     torch.save(model.state_dict(), 'models/model.pth')
     return model
 
 def load_test_images(test_images_folder):
     test_images_paths = glob.glob(os.path.join(test_images_folder, '*.jpg')) + glob.glob(os.path.join(test_images_folder, '*.png')) + glob.glob(os.path.join(test_images_folder, '*.JPG')) + glob.glob(os.path.join(test_images_folder, '*.PNG'))
-    test_images = [Image.open(image_path).convert('RGB') for image_path in test_images_paths]
+    test_images = []
+    for image_path in test_images_paths:
+        try:
+            image = Image.open(image_path).convert('RGB')
+            test_images.append(image)
+        except IOError:
+            print(f"Warning: Could not open image file {image_path}. Skipping.")
     return test_images, test_images_paths
 
 def load_model(device, model_file):
@@ -101,11 +116,11 @@ def main(training_images_folder, test_images_folder, model_file, sort_output, ou
         'person': os.path.join(training_images_folder, 'person'),
         'not_person': os.path.join(training_images_folder, 'not_person')
     }
-    dataloader = preprocess_data(training_images_folder)
     if model_file:
         model = load_model(device, model_file)
         print("Model loaded.")
     else:
+        dataloader = preprocess_data(training_images_folder)
         model = train_model(dataloader, device)
         print("Training complete.")
 
