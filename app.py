@@ -1,13 +1,14 @@
-import glob
-import sys
+import torch
+from torch.utils.data import DataLoader
+from torchvision import transforms
+from torchvision.transforms import ToTensor
 import argparse
 from facenet_pytorch import MTCNN, InceptionResnetV1
-import torch
 from PIL import Image
 import os
-from torchvision import datasets, transforms
-from torch.utils.data import DataLoader, Dataset
-from torchvision.transforms import ToTensor
+from torchvision.transforms import RandomHorizontalFlip, RandomRotation, Resize, Normalize
+from torch.utils.data import Dataset
+import glob
 
 class CustomImageDataset(Dataset):
     def __init__(self, img_dirs, transform=None):
@@ -34,19 +35,26 @@ class CustomImageDataset(Dataset):
 
 def preprocess_data(training_images_folder):
     dataset = CustomImageDataset(training_images_folder, transform=transforms.Compose([
-        transforms.Resize((160, 160)),
-        transforms.ToTensor(),
-        transforms.Normalize(mean=(0.5, 0.5, 0.5), std=(0.5, 0.5, 0.5)),
+        Resize((160, 160)),
+        RandomHorizontalFlip(),
+        RandomRotation(20),
+        ToTensor(),
+        Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5]),
     ]))
-    dataloader = DataLoader(dataset, batch_size=len(dataset)//2, shuffle=True)
+    dataloader = DataLoader(dataset, batch_size=16, shuffle=True)
     return dataloader
 
 def train_model(dataloader, device):
     model = InceptionResnetV1(pretrained='vggface2').to(device)
+    for param in model.parameters():
+        param.requires_grad = False
+    for param in model.last_linear.parameters():
+        param.requires_grad = True
+    model.dropout = torch.nn.Dropout(0.5)
     model.train()
-    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+    optimizer = torch.optim.Adam(model.last_linear.parameters(), lr=0.001)  # Smaller learning rate
     criterion = torch.nn.CrossEntropyLoss()
-    for epoch in range(5):
+    for epoch in range(20):
         running_loss = 0.0
         for i, data in enumerate(dataloader, 0):
             inputs, labels = data[0].to(device), data[1].to(device)
@@ -56,6 +64,7 @@ def train_model(dataloader, device):
             loss.backward()
             optimizer.step()
             running_loss += loss.item()
+        print(f"Epoch {epoch+1}, Loss: {running_loss}")
     return model
 
 def detect_faces(model, device, test_images, test_images_paths):
@@ -92,13 +101,7 @@ def main(training_images_folder, test_images_folder):
     }
     dataloader = preprocess_data(training_images_folder)
     model = train_model(dataloader, device)
-    test_images, test_images_paths = load_test_images(test_images_folder)
-    embeddings = detect_faces(model, device, test_images, test_images_paths)
-    for path, embedding in zip(test_images_paths, embeddings):
-        if embedding is not None:
-            print(f"Face detected in {path} with embeddings: {embedding}")
-        else:
-            print(f"No face detected in {path}.")
+    print("Training complete.")
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
