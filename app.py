@@ -1,9 +1,11 @@
+import os
+import shutil
 import torch
 from torch.utils.data import DataLoader
 from torchvision import transforms
 from torchvision.transforms import ToTensor
 import argparse
-from facenet_pytorch import MTCNN, InceptionResnetV1
+from facenet_pytorch import MTCNN
 from PIL import Image
 import os
 from torchvision.transforms import RandomHorizontalFlip, RandomRotation, Resize, Normalize
@@ -17,7 +19,7 @@ class CustomImageDataset(Dataset):
         self.img_names = []
         for label, dir_path in img_dirs.items():
             for img_name in os.listdir(dir_path):
-                if img_name.endswith('.jpg'):
+                if img_name.lower().endswith(('.jpg', '.png')):
                     self.img_names.append(os.path.join(dir_path, img_name))
                     numeric_label = 0 if label == 'person' else 1
                     self.img_labels.append(numeric_label)
@@ -65,11 +67,11 @@ def preprocess_data(training_images_folder):
     return dataloader
 
 def train_model(dataloader, device):
-    model = SimpleCNN().to(device)  # Use SimpleCNN instead of InceptionResnetV1
+    model = SimpleCNN().to(device)
     model.train()
     optimizer = torch.optim.Adam(model.parameters(), lr=0.001)  # Train all parameters
     criterion = torch.nn.CrossEntropyLoss()
-    for epoch in range(20):
+    for epoch in range(50):
         running_loss = 0.0
         for i, data in enumerate(dataloader, 0):
             inputs, labels = data[0].to(device), data[1].to(device)
@@ -80,43 +82,32 @@ def train_model(dataloader, device):
             optimizer.step()
             running_loss += loss.item()
         print(f"Epoch {epoch+1}, Loss: {running_loss}")
+    torch.save(model.state_dict(), 'models/model.pth')
     return model
 
-def detect_faces(model, device, test_images, test_images_paths):
-    model.eval()
-    mtcnn = MTCNN(keep_all=True, device=device)
-    embeddings = []
-    for idx, test_image in enumerate(test_images):
-        try:
-            test_image_cropped = mtcnn(test_image)
-            if test_image_cropped is not None and len(test_image_cropped) > 0:
-                if isinstance(test_image_cropped, list):
-                    test_image_cropped = torch.stack(test_image_cropped).to(device)
-                else:
-                    test_image_cropped = test_image_cropped.unsqueeze(0).to(device)
-                embedding = model(test_image_cropped)
-                embeddings.append(embedding)
-            else:
-                embeddings.append(None)
-        except Exception as e:
-            embeddings.append(None)
-    model.train()
-    return embeddings
-
 def load_test_images(test_images_folder):
-    test_images_paths = glob.glob(os.path.join(test_images_folder, '*.jpg'))
+    test_images_paths = glob.glob(os.path.join(test_images_folder, '*.jpg')) + glob.glob(os.path.join(test_images_folder, '*.png')) + glob.glob(os.path.join(test_images_folder, '*.JPG')) + glob.glob(os.path.join(test_images_folder, '*.PNG'))
     test_images = [Image.open(image_path).convert('RGB') for image_path in test_images_paths]
     return test_images, test_images_paths
 
-def main(training_images_folder, test_images_folder):
+def load_model(device, model_file):
+    model = SimpleCNN().to(device)
+    model.load_state_dict(torch.load(model_file))
+    return model
+
+def main(training_images_folder, test_images_folder, model_file, sort_output, output_folder, score_threshold):
     device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
     training_images_folder = {
         'person': os.path.join(training_images_folder, 'person'),
         'not_person': os.path.join(training_images_folder, 'not_person')
     }
     dataloader = preprocess_data(training_images_folder)
-    model = train_model(dataloader, device)
-    print("Training complete.")
+    if model_file:
+        model = load_model(device, model_file)
+        print("Model loaded.")
+    else:
+        model = train_model(dataloader, device)
+        print("Training complete.")
 
     # Load test images
     test_images, test_images_paths = load_test_images(test_images_folder)
@@ -139,6 +130,10 @@ def main(training_images_folder, test_images_folder):
             score = torch.nn.functional.softmax(output, dim=1)[0][predicted].item()
             label = 'person' if predicted.item() == 0 else 'not_person'
             print(f"Image: {test_images_paths[i]}, Label: {label}, Score: {score}")
+            if sort_output and score >= score_threshold:
+                dest_folder = os.path.join(output_folder, label)
+                os.makedirs(dest_folder, exist_ok=True)
+                shutil.copy(test_images_paths[i], dest_folder)
 
     model.train()
 
@@ -146,5 +141,9 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument("--training_images_folder", type=str, default="training_images", help="Folder containing images of the face to train on.")
     parser.add_argument("--test_images_folder", type=str, default="test_images", help="Folder containing images to test.")
+    parser.add_argument("--model_file", type=str, help="Model file to load.")
+    parser.add_argument("--sort_output", type=bool, default=False, help="Whether to sort the output.")
+    parser.add_argument("--output_folder", type=str, default="output", help="Folder to store the output.")
+    parser.add_argument("--score_threshold", type=float, default=0, help="Score threshold for sorting output.")
     args = parser.parse_args()
-    main(args.training_images_folder, args.test_images_folder)
+    main(args.training_images_folder, args.test_images_folder, args.model_file, args.sort_output, args.output_folder, args.score_threshold)
