@@ -1,3 +1,5 @@
+import os
+import shutil
 import torch
 from torch.utils.data import DataLoader
 from torchvision import transforms
@@ -80,6 +82,7 @@ def train_model(dataloader, device):
             optimizer.step()
             running_loss += loss.item()
         print(f"Epoch {epoch+1}, Loss: {running_loss}")
+    torch.save(model.state_dict(), 'models/model.pth')  # Save the model
     return model
 
 def detect_faces(model, device, test_images, test_images_paths):
@@ -108,15 +111,24 @@ def load_test_images(test_images_folder):
     test_images = [Image.open(image_path).convert('RGB') for image_path in test_images_paths]
     return test_images, test_images_paths
 
-def main(training_images_folder, test_images_folder):
+def load_model(device, model_file):
+    model = SimpleCNN().to(device)
+    model.load_state_dict(torch.load(model_file))
+    return model
+
+def main(training_images_folder, test_images_folder, model_file, sort_output, output_folder):
     device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
     training_images_folder = {
         'person': os.path.join(training_images_folder, 'person'),
         'not_person': os.path.join(training_images_folder, 'not_person')
     }
     dataloader = preprocess_data(training_images_folder)
-    model = train_model(dataloader, device)
-    print("Training complete.")
+    if model_file:
+        model = load_model(device, model_file)
+        print("Model loaded.")
+    else:
+        model = train_model(dataloader, device)
+        print("Training complete.")
 
     # Load test images
     test_images, test_images_paths = load_test_images(test_images_folder)
@@ -139,6 +151,10 @@ def main(training_images_folder, test_images_folder):
             score = torch.nn.functional.softmax(output, dim=1)[0][predicted].item()
             label = 'person' if predicted.item() == 0 else 'not_person'
             print(f"Image: {test_images_paths[i]}, Label: {label}, Score: {score}")
+            if sort_output:
+                dest_folder = os.path.join(output_folder, label)
+                os.makedirs(dest_folder, exist_ok=True)
+                shutil.copy(test_images_paths[i], dest_folder)
 
     model.train()
 
@@ -146,5 +162,8 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument("--training_images_folder", type=str, default="training_images", help="Folder containing images of the face to train on.")
     parser.add_argument("--test_images_folder", type=str, default="test_images", help="Folder containing images to test.")
+    parser.add_argument("--model_file", type=str, help="Model file to load.")
+    parser.add_argument("--sort_output", type=bool, default=False, help="Whether to sort the output.")
+    parser.add_argument("--output_folder", type=str, default="output", help="Folder to store the output.")
     args = parser.parse_args()
-    main(args.training_images_folder, args.test_images_folder)
+    main(args.training_images_folder, args.test_images_folder, args.model_file, args.sort_output, args.output_folder)
