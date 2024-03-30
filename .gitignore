@@ -160,5 +160,8 @@ cython_debug/
 #.idea/
 models/*.pth
 output/**/*.jpg
+output/**/*.png
 test_images/**/*.jpg
+test_images/**/*.png
 training_images/**/*.jpg
+training_images/**/*.png
